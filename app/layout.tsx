@@ -23,7 +23,10 @@ export const metadata: Metadata = {
   title: "Adopt Luck | Adopt Me pet games",
   description:
     "Play CoinFlip, Jackpot, Upgrader, and Race with Adopt Me pets. Values from Elvebredd.",
-  icons: { icon: "/logo.png" },
+  icons: {
+    icon: [{ url: "/logo.png", type: "image/png" }],
+    apple: "/logo.png",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
