@@ -94,31 +94,36 @@ export async function POST(request: Request) {
 
   const staff = (process.env.ROBLOX_STAFF_IDS || "").split(",").map((item) => item.trim()).filter(Boolean);
   const hue = hueFromRobloxId(live.id);
-  let user = await db.user.findUnique({ where: { robloxId: live.id } });
-  if (!user) {
-    user = await db.user.create({
-      data: {
-        id: newId("user"),
-        robloxId: live.id,
-        name: live.username,
-        avatarUrl: live.avatar || null,
-        hue,
-        isStaff: staff.includes(live.id),
-      },
-    });
-  } else {
-    user = await db.user.update({
-      where: { id: user.id },
-      data: {
-        name: live.username,
-        avatarUrl: live.avatar || user.avatarUrl,
-        isStaff: staff.includes(live.id),
-      },
-    });
-  }
+  try {
+    let user = await db.user.findUnique({ where: { robloxId: live.id } });
+    if (!user) {
+      user = await db.user.create({
+        data: {
+          id: newId("user"),
+          robloxId: live.id,
+          name: live.username,
+          avatarUrl: live.avatar || null,
+          hue,
+          isStaff: staff.includes(live.id),
+        },
+      });
+    } else {
+      user = await db.user.update({
+        where: { id: user.id },
+        data: {
+          name: live.username,
+          avatarUrl: live.avatar || user.avatarUrl,
+          isStaff: staff.includes(live.id),
+        },
+      });
+    }
 
-  await clearChallenge(live.id);
-  await grantStarter(user.id);
-  await setSessionCookie(user.id);
-  return ok({ step: "done", user: toPlayer(user) });
+    await clearChallenge(live.id);
+    await grantStarter(user.id);
+    await setSessionCookie(user.id);
+    return ok({ step: "done", user: toPlayer(user) });
+  } catch (error) {
+    console.error("login persist failed", error);
+    return fail("Could not save your login. Check the production database connection.");
+  }
 }
