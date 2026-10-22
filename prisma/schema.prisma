@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id
+  robloxId  String?  @unique
+  name      String
+  avatarUrl String?
+  hue       Int      @default(18)
+  isBot     Boolean  @default(false)
+  isStaff   Boolean  @default(false)
+  wagered   Float    @default(0)
+  profit    Float    @default(0)
+  wins      Int      @default(0)
+  games     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  inventory     InventoryItem[]
+  chat          ChatMessage[]
+  history       HistoryItem[]
+  gameEntries   GameEntry[]
+  transactions  Transaction[]
+}
+
+model InventoryItem {
+  id        String   @id
+  userId    String
+  petId     String
+  fly       Boolean  @default(false)
+  ride      Boolean  @default(false)
+  neon      Boolean  @default(false)
+  mega      Boolean  @default(false)
+  locked    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, locked])
+}
+
+model Game {
+  id        String   @id
+  mode      String
+  status    String
+  result    String?
+  winnerId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  entries   GameEntry[]
+
+  @@index([mode, status])
+}
+
+model GameEntry {
+  id        String   @id
+  gameId    String
+  userId    String
+  itemsJson String
+  side      String?
+  color     String?
+  createdAt DateTime @default(now())
+  game      Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([gameId])
+  @@index([userId])
+}
+
+model ChatMessage {
+  id        String   @id
+  userId    String
+  text      String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model HistoryItem {
+  id        String   @id
+  userId    String
+  mode      String
+  title     String
+  value     Float
+  won       Boolean
+  detail    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model LoginChallenge {
+  id        String   @id
+  robloxId  String
+  username  String
+  code      String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([username])
+  @@index([robloxId])
+}
+
+model Transaction {
+  id        String   @id
+  userId    String
+  type      String
+  itemsJson String
+  value     Float
+  status    String   @default("completed")
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

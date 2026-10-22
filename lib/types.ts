@@ -8,6 +8,15 @@ export type PetValues = {
   regular: number;
   neon: number;
   mega: number;
+  regularRide?: number;
+  regularFly?: number;
+  regularFr?: number;
+  neonRide?: number;
+  neonFly?: number;
+  neonFr?: number;
+  megaRide?: number;
+  megaFly?: number;
+  megaFr?: number;
 };
 
 export type Pet = {
@@ -35,6 +44,8 @@ export type Player = {
   name: string;
   hue: number;
   isBot: boolean;
+  robloxId?: string;
+  avatar?: string;
 };
 
 export type CoinFlipGame = {

@@ -57,7 +57,32 @@ export const PETS: Pet[] = [
   { id: "australian-kelpie", name: "Australian Kelpie", rarity: "uncommon", emoji: "🐕", color: "#6b3e26", image: img("Australian Kelpie"), values: { regular: 0.2, neon: 0.85, mega: 3.6 }, source: "elvebredd" },
 ];
 
-export const PET_MAP = new Map(PETS.map((pet) => [pet.id, pet]));
+export const VALUES_UPDATED = "October 22, 2026";
+export const VALUES_SOURCE = "https://elvebredd.com/";
+
+let catalog = PETS;
+let catalogStamp = VALUES_UPDATED;
+
+function rebuildMap() {
+  return new Map(catalog.map((pet) => [pet.id, pet]));
+}
+
+let PET_MAP = rebuildMap();
+
+export function getCatalog() {
+  return catalog;
+}
+
+export function catalogUpdated() {
+  return catalogStamp;
+}
+
+export function setCatalog(pets: Pet[], stamp = new Date().toISOString()) {
+  if (!pets.length) return;
+  catalog = pets;
+  catalogStamp = stamp;
+  PET_MAP = rebuildMap();
+}
 
 export function getPet(id: string) {
   return PET_MAP.get(id);
@@ -66,11 +91,30 @@ export function getPet(id: string) {
 /** Elvebredd potion premiums on top of the listed NP tier value. */
 const POTION_MULT = { np: 1, r: 1.08, f: 1.12, fr: 1.2 } as const;
 
+function tierValue(pet: Pet, item: PetInstance) {
+  const potion = potionOf(item);
+  if (item.mega) {
+    if (potion === "fr" && pet.values.megaFr) return pet.values.megaFr;
+    if (potion === "f" && pet.values.megaFly) return pet.values.megaFly;
+    if (potion === "r" && pet.values.megaRide) return pet.values.megaRide;
+    return pet.values.mega * POTION_MULT[potion];
+  }
+  if (item.neon) {
+    if (potion === "fr" && pet.values.neonFr) return pet.values.neonFr;
+    if (potion === "f" && pet.values.neonFly) return pet.values.neonFly;
+    if (potion === "r" && pet.values.neonRide) return pet.values.neonRide;
+    return pet.values.neon * POTION_MULT[potion];
+  }
+  if (potion === "fr" && pet.values.regularFr) return pet.values.regularFr;
+  if (potion === "f" && pet.values.regularFly) return pet.values.regularFly;
+  if (potion === "r" && pet.values.regularRide) return pet.values.regularRide;
+  return pet.values.regular * POTION_MULT[potion];
+}
+
 export function itemValue(item: PetInstance) {
   const pet = getPet(item.petId);
   if (!pet) return 0;
-  const tier = item.mega ? pet.values.mega : item.neon ? pet.values.neon : pet.values.regular;
-  return Number((tier * POTION_MULT[potionOf(item)]).toFixed(3));
+  return Number(tierValue(pet, item).toFixed(3));
 }
 
 export function itemsValue(items: PetInstance[]) {

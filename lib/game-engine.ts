@@ -21,7 +21,9 @@ export function canJoinValue(host: number, guest: number) {
 }
 
 export function flipCoin(): CoinSide {
-  return Math.random() < 0.5 ? "heads" : "tails";
+  const bit = new Uint8Array(1);
+  crypto.getRandomValues(bit);
+  return bit[0] % 2 === 0 ? "heads" : "tails";
 }
 
 export function pickWeightedWinner(entries: JackpotEntry[]) {
@@ -35,8 +37,8 @@ export function pickWeightedWinner(entries: JackpotEntry[]) {
 }
 
 export function upgradeChance(stake: number, target: number) {
-  if (target <= 0) return 0;
-  return Math.max(0.5, Math.min(90, (stake / target) * 100 * UPGRADE_HOUSE));
+  if (stake <= 0 || target <= 0) return 0;
+  return Math.max(0, Math.min(90, (stake / target) * 100 * UPGRADE_HOUSE));
 }
 
 export function playerColor(player: Player) {
