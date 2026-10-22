@@ -2,6 +2,7 @@ import "server-only";
 import https from "node:https";
 import { db } from "@/lib/db";
 import { fetchHeadshot } from "@/lib/roblox-avatar.server";
+import { apiError, apiLog } from "@/lib/server/log";
 
 export { fetchHeadshot };
 
@@ -208,8 +209,9 @@ export async function saveChallenge(robloxId: string, username: string, code: st
       },
       update: { username, code, expiresAt: new Date(expiresAt) },
     });
-  } catch {
-    // keep the in-memory copy if the table is unavailable
+    apiLog("challenge", "save", { robloxId, username });
+  } catch (error) {
+    apiError("challenge", "save", error, { robloxId });
   }
 }
 
@@ -231,7 +233,8 @@ export async function getChallenge(robloxId: string) {
     };
     challenges.set(robloxId, mapped);
     return mapped;
-  } catch {
+  } catch (error) {
+    apiError("challenge", "get", error, { robloxId });
     return null;
   }
 }
@@ -240,7 +243,7 @@ export async function clearChallenge(robloxId: string) {
   challenges.delete(robloxId);
   try {
     await db.loginChallenge.deleteMany({ where: { robloxId } });
-  } catch {
-    // ignore
+  } catch (error) {
+    apiError("challenge", "clear", error, { robloxId });
   }
 }

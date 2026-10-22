@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
+import { apiError } from "@/lib/server/log";
 
 const COOKIE = "adoptluck_session";
 
@@ -42,7 +43,8 @@ export async function getSessionUser() {
     const { payload } = await jwtVerify(token, secret());
     if (!payload.sub) return null;
     return db.user.findUnique({ where: { id: payload.sub } });
-  } catch {
+  } catch (error) {
+    apiError("auth", "session", error);
     return null;
   }
 }
