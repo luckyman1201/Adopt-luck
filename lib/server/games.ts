@@ -2,18 +2,74 @@ import { db } from "@/lib/db";
 import { canJoinValue, flipCoin, pickWeightedWinner, upgradeChance } from "@/lib/game-engine";
 import { ensureCatalog } from "@/lib/catalog.server";
 import { getCatalog, itemValue, itemsValue, makeItem } from "@/lib/pets";
+import { samePlayer } from "@/lib/player";
 import { dumpItems, newId, parseItems, playerColor, toItem, toPlayer } from "@/lib/server/helpers";
-import type { CoinFlipGame, CoinSide, JackpotGame, PetInstance, RaceGame } from "@/lib/types";
-import type { Game, GameEntry, User } from "@prisma/client";
+import { absorbUsers, mergeTwinUsers } from "@/lib/server/users";
+import type { CoinFlipGame, CoinSide, JackpotGame, PetInstance, RaceGame, UpgradeRoll } from "@/lib/types";
+import type { Game, GameEntry, Prisma, User } from "@prisma/client";
+
+type Tx = Prisma.TransactionClient | typeof db;
 
 type GameWithBits = Game & { entries: (GameEntry & { user: User })[] };
 
-async function lockItems(userId: string, ids: string[]) {
+function sameSeat(
+  entryUser: Pick<User, "id" | "robloxId" | "name" | "isBot">,
+  user: Pick<User, "id" | "robloxId" | "name" | "isBot">,
+) {
+  return samePlayer(entryUser, user);
+}
+
+function seatedEntry(game: GameWithBits, user: Pick<User, "id" | "robloxId" | "name" | "isBot">) {
+  return game.entries.find((entry) => sameSeat(entry.user, user));
+}
+
+function seatGroups(entries: GameWithBits["entries"]) {
+  const groups: GameWithBits["entries"][] = [];
+  for (const entry of entries) {
+    const found = groups.find((group) => group.some((row) => sameSeat(row.user, entry.user)));
+    if (found) found.push(entry);
+    else groups.push([entry]);
+  }
+  return groups;
+}
+
+async function repairDuplicateSeats(game: GameWithBits) {
+  let changed = false;
+  for (const group of seatGroups(game.entries)) {
+    if (group.length < 2) continue;
+    const users = [...new Map(group.map((entry) => [entry.user.id, entry.user])).values()];
+    const keepUser = users.find((user) => user.robloxId) || users[0];
+    const twinIds = users.filter((user) => user.id !== keepUser.id).map((user) => user.id);
+    if (twinIds.length) {
+      await absorbUsers(keepUser.id, twinIds);
+      changed = true;
+    }
+    const keep = group.find((entry) => entry.userId === keepUser.id) || group[0];
+    const extras = group.filter((entry) => entry.id !== keep.id);
+    const items = group.flatMap((entry) => parseItems(entry.itemsJson));
+    await db.gameEntry.update({
+      where: { id: keep.id },
+      data: { itemsJson: dumpItems(items), userId: keepUser.id },
+    });
+    if (extras.length) {
+      await db.gameEntry.deleteMany({ where: { id: { in: extras.map((entry) => entry.id) } } });
+    }
+    changed = true;
+  }
+  return changed;
+}
+
+async function lockItems(userId: string, ids: string[], tx: Tx = db) {
   await ensureCatalog();
-  const rows = await db.inventoryItem.findMany({ where: { id: { in: ids }, userId, locked: false } });
-  if (rows.length !== ids.length) throw new Error("Some pets are missing or already in a game");
-  await db.inventoryItem.updateMany({ where: { id: { in: ids } }, data: { locked: true } });
-  return rows;
+  const unique = [...new Set(ids)];
+  if (!unique.length) throw new Error("Select pets");
+  if (unique.length !== ids.length) throw new Error("The same pet cannot be used twice");
+  const updated = await tx.inventoryItem.updateMany({
+    where: { id: { in: unique }, userId, locked: false },
+    data: { locked: true },
+  });
+  if (updated.count !== unique.length) throw new Error("Some pets are missing or already in a game");
+  return tx.inventoryItem.findMany({ where: { id: { in: unique }, userId } });
 }
 
 export function mapCoin(game: GameWithBits): CoinFlipGame {
@@ -33,18 +89,63 @@ export function mapCoin(game: GameWithBits): CoinFlipGame {
   };
 }
 
+function uniqueEntries(game: GameWithBits) {
+  return seatGroups(game.entries).map((group) => {
+    const keep = { ...group[0], itemsJson: dumpItems(group.flatMap((entry) => parseItems(entry.itemsJson))) };
+    return keep;
+  });
+}
+
 export function mapPot(game: GameWithBits): JackpotGame {
   return {
     id: game.id,
     createdAt: game.createdAt.getTime(),
     status: game.status as JackpotGame["status"],
     winnerId: game.winnerId || undefined,
-    entries: game.entries.map((entry) => ({
+    entries: uniqueEntries(game).map((entry) => ({
       player: toPlayer(entry.user),
       items: parseItems(entry.itemsJson),
       color: entry.color || playerColor(entry.user),
     })),
   };
+}
+
+function parseUpgradeTarget(side: string | null): PetInstance | null {
+  if (!side) return null;
+  try {
+    const parsed = JSON.parse(side) as PetInstance | PetInstance[];
+    const target = Array.isArray(parsed) ? parsed[0] : parsed;
+    return target?.petId ? target : null;
+  } catch {
+    return null;
+  }
+}
+
+export function mapUpgrade(game: GameWithBits): UpgradeRoll | null {
+  const entry = game.entries[0];
+  if (!entry) return null;
+  const target = parseUpgradeTarget(entry.side);
+  if (!target) return null;
+  return {
+    id: game.id,
+    at: game.createdAt.getTime(),
+    player: toPlayer(entry.user),
+    stakeItems: parseItems(entry.itemsJson),
+    target,
+    chance: 0,
+    roll: 0,
+    won: game.result === "win",
+  };
+}
+
+export async function listLiveUpgrades() {
+  const games = await db.game.findMany({
+    where: { mode: "upgrade", result: "win" },
+    include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
+    orderBy: { createdAt: "desc" },
+    take: 16,
+  });
+  return games.map(mapUpgrade).filter((row): row is UpgradeRoll => Boolean(row));
 }
 
 export function mapRace(game: GameWithBits): RaceGame {
@@ -53,7 +154,7 @@ export function mapRace(game: GameWithBits): RaceGame {
     createdAt: game.createdAt.getTime(),
     status: game.status as RaceGame["status"],
     winnerId: game.winnerId || undefined,
-    entries: game.entries.map((entry) => ({
+    entries: uniqueEntries(game).map((entry) => ({
       player: toPlayer(entry.user),
       items: parseItems(entry.itemsJson),
       color: entry.color || playerColor(entry.user),
@@ -67,7 +168,18 @@ async function loadGame(id: string) {
     include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
   });
   if (!game) throw new Error("Game not found");
-  return game;
+  const merged = await mergeTwinUsers(game.entries.map((entry) => entry.user));
+  const latest = merged
+    ? await db.game.findUnique({
+        where: { id },
+        include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
+      })
+    : game;
+  if (!latest) throw new Error("Game not found");
+  if (await repairDuplicateSeats(latest)) {
+    return loadGame(id);
+  }
+  return latest;
 }
 
 export async function settleStaleGames() {
@@ -89,10 +201,28 @@ export async function settleStaleGames() {
 export async function listGames() {
   await settleStaleGames();
   const games = await db.game.findMany({
+    where: { mode: { in: ["coinflip", "jackpot", "race"] } },
     include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
     orderBy: { createdAt: "desc" },
     take: 80,
   });
+  const merged = await mergeTwinUsers(games.flatMap((game) => game.entries.map((entry) => entry.user)));
+  for (const game of games) {
+    if (merged) {
+      const latest = await db.game.findUnique({
+        where: { id: game.id },
+        include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
+      });
+      if (latest) Object.assign(game, latest);
+    }
+    if (await repairDuplicateSeats(game)) {
+      const fresh = await db.game.findUnique({
+        where: { id: game.id },
+        include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
+      });
+      if (fresh) Object.assign(game, fresh);
+    }
+  }
   return {
     coins: games.filter((game) => game.mode === "coinflip").map(mapCoin),
     jackpots: games.filter((game) => game.mode === "jackpot").map(mapPot),
@@ -101,49 +231,55 @@ export async function listGames() {
 }
 
 export async function createCoin(userId: string, itemIds: string[], side: CoinSide) {
-  const rows = await lockItems(userId, itemIds);
   const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
-  const game = await db.game.create({
-    data: {
-      id: newId("cf"),
-      mode: "coinflip",
-      status: "open",
-      entries: {
-        create: {
-          id: newId("ge"),
-          userId,
-          itemsJson: dumpItems(rows.map(toItem)),
-          side,
+  const game = await db.$transaction(async (tx) => {
+    const rows = await lockItems(userId, itemIds, tx);
+    return tx.game.create({
+      data: {
+        id: newId("cf"),
+        mode: "coinflip",
+        status: "open",
+        entries: {
+          create: {
+            id: newId("ge"),
+            userId,
+            itemsJson: dumpItems(rows.map(toItem)),
+            side,
+          },
         },
       },
-    },
-    include: { entries: { include: { user: true } } },
+      include: { entries: { include: { user: true } } },
+    });
   });
   game.entries[0].user = user;
   return mapCoin(game);
 }
 
 export async function joinCoin(userId: string, gameId: string, itemIds: string[]) {
-  const game = await loadGame(gameId);
-  if (game.mode !== "coinflip" || game.status !== "open") throw new Error("This CoinFlip is not open");
-  if (game.entries.some((entry) => entry.userId === userId)) throw new Error("You are already in this game");
-  const hostItems = parseItems(game.entries[0].itemsJson);
-  const rows = await lockItems(userId, itemIds);
-  const guestItems = rows.map(toItem);
-  if (!canJoinValue(itemsValue(hostItems), itemsValue(guestItems))) {
-    await db.inventoryItem.updateMany({ where: { id: { in: itemIds } }, data: { locked: false } });
-    throw new Error("Value must be within 12% of the host");
-  }
-  const result = flipCoin();
-  const host = game.entries[0];
-  const hostSide = (host.side as CoinSide) || "heads";
-  const winnerId = result === hostSide ? host.userId : userId;
-  await db.$transaction([
-    db.gameEntry.create({
+  await loadGame(gameId);
+  const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
+  await db.$transaction(async (tx) => {
+    const game = await tx.game.findUnique({
+      where: { id: gameId },
+      include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
+    });
+    if (!game || game.mode !== "coinflip" || game.status !== "open") throw new Error("This CoinFlip is not open");
+    if (seatedEntry(game, user)) throw new Error("You are already in this game");
+    const hostItems = parseItems(game.entries[0].itemsJson);
+    const rows = await lockItems(userId, itemIds, tx);
+    const guestItems = rows.map(toItem);
+    if (!canJoinValue(itemsValue(hostItems), itemsValue(guestItems))) {
+      throw new Error("Value must be within 12% of the host");
+    }
+    const result = flipCoin();
+    const host = game.entries[0];
+    const hostSide = (host.side as CoinSide) || "heads";
+    const winnerId = result === hostSide ? host.userId : userId;
+    await tx.gameEntry.create({
       data: { id: newId("ge"), gameId, userId, itemsJson: dumpItems(guestItems) },
-    }),
-    db.game.update({ where: { id: gameId }, data: { status: "flipping", result, winnerId } }),
-  ]);
+    });
+    await tx.game.update({ where: { id: gameId }, data: { status: "flipping", result, winnerId } });
+  });
   return mapCoin(await loadGame(gameId));
 }
 
@@ -278,46 +414,68 @@ export async function finishCoin(gameId: string) {
   return mapCoin(await loadGame(gameId));
 }
 
+async function assertFreeForLobby(user: User, mode: "jackpot" | "race", tx: Tx = db) {
+  const open = await tx.game.findMany({
+    where: { mode, status: "open" },
+    include: { entries: { include: { user: true } } },
+  });
+  if (open.some((game) => seatedEntry(game, user))) {
+    throw new Error(mode === "jackpot" ? "You are already in this jackpot" : "You are already in this race");
+  }
+}
+
 export async function createPot(userId: string, itemIds: string[], mode: "jackpot" | "race") {
-  const rows = await lockItems(userId, itemIds);
   const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
-  const game = await db.game.create({
-    data: {
-      id: newId(mode === "jackpot" ? "jp" : "rc"),
-      mode,
-      status: "open",
-      entries: {
-        create: {
-          id: newId("ge"),
-          userId,
-          itemsJson: dumpItems(rows.map(toItem)),
-          color: playerColor(user),
+  const game = await db.$transaction(async (tx) => {
+    await assertFreeForLobby(user, mode, tx);
+    const rows = await lockItems(userId, itemIds, tx);
+    return tx.game.create({
+      data: {
+        id: newId(mode === "jackpot" ? "jp" : "rc"),
+        mode,
+        status: "open",
+        entries: {
+          create: {
+            id: newId("ge"),
+            userId,
+            itemsJson: dumpItems(rows.map(toItem)),
+            color: playerColor(user),
+          },
         },
       },
-    },
-    include: { entries: { include: { user: true } } },
+      include: { entries: { include: { user: true } } },
+    });
   });
   return mode === "jackpot" ? mapPot(game) : mapRace(game);
 }
 
 export async function joinPot(userId: string, gameId: string, itemIds: string[]) {
-  const game = await loadGame(gameId);
-  if (game.status !== "open") throw new Error("This lobby is not open");
-  if (game.entries.some((entry) => entry.userId === userId)) throw new Error("You are already in this lobby");
-  const max = game.mode === "race" ? 6 : 8;
-  if (game.entries.length >= max) throw new Error("Lobby is full");
-  const rows = await lockItems(userId, itemIds);
+  await loadGame(gameId);
   const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
-  await db.gameEntry.create({
-    data: {
-      id: newId("ge"),
-      gameId,
-      userId,
-      itemsJson: dumpItems(rows.map(toItem)),
-      color: playerColor(user),
-    },
+  const mode = await db.$transaction(async (tx) => {
+    const game = await tx.game.findUnique({
+      where: { id: gameId },
+      include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
+    });
+    if (!game) throw new Error("Game not found");
+    if (game.status !== "open") throw new Error("This lobby is not open");
+    if (seatedEntry(game, user)) throw new Error("You are already in this lobby");
+    await assertFreeForLobby(user, game.mode === "race" ? "race" : "jackpot", tx);
+    const max = game.mode === "race" ? 6 : 8;
+    if (game.entries.length >= max) throw new Error("Lobby is full");
+    const rows = await lockItems(userId, itemIds, tx);
+    await tx.gameEntry.create({
+      data: {
+        id: newId("ge"),
+        gameId,
+        userId,
+        itemsJson: dumpItems(rows.map(toItem)),
+        color: playerColor(user),
+      },
+    });
+    return game.mode;
   });
-  return game.mode === "jackpot" ? mapPot(await loadGame(gameId)) : mapRace(await loadGame(gameId));
+  return mode === "jackpot" ? mapPot(await loadGame(gameId)) : mapRace(await loadGame(gameId));
 }
 
 export async function resolvePot(gameId: string, nextStatus: "spinning" | "racing") {
@@ -398,6 +556,7 @@ export async function rollUpgrade(userId: string, itemIds: string[], target: Pet
   const chance = upgradeChance(stake, targetValue);
   const roll = Number((Math.random() * 100).toFixed(2));
   const won = roll <= chance;
+  const gameId = newId("up");
   await db.$transaction(async (tx) => {
     await tx.inventoryItem.deleteMany({ where: { id: { in: itemIds } } });
     if (won) {
@@ -435,18 +594,61 @@ export async function rollUpgrade(userId: string, itemIds: string[], target: Pet
     });
     await tx.game.create({
       data: {
-        id: newId("up"),
+        id: gameId,
         mode: "upgrade",
         status: "done",
         result: won ? "win" : "lose",
         winnerId: won ? userId : null,
         entries: {
-          create: { id: newId("ge"), userId, itemsJson: dumpItems(stakeItems) },
+          create: { id: newId("ge"), userId, itemsJson: dumpItems(stakeItems), side: JSON.stringify(target) },
         },
       },
     });
   });
-  return { chance, roll, won };
+  const created = await db.game.findUnique({
+    where: { id: gameId },
+    include: { entries: { include: { user: true }, orderBy: { createdAt: "asc" } } },
+  });
+  const upgrade = created ? mapUpgrade(created) : null;
+  return { chance, roll, won, upgrade: upgrade ? { ...upgrade, chance, roll, won } : null };
+}
+
+export async function cancelGame(userId: string, gameId: string) {
+  const game = await loadGame(gameId);
+  const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
+  if (game.status !== "open") throw new Error("This game can no longer be cancelled");
+  const creator = game.entries[0];
+  const isCreator = Boolean(creator && sameSeat(creator.user, user));
+  const mine = seatedEntry(game, user) || game.entries.find((entry) => entry.userId === userId);
+  if (!mine) throw new Error("You are not in this game");
+
+  if (game.mode === "coinflip") {
+    if (!isCreator) throw new Error("Only the creator can cancel this table");
+    if (game.entries.length > 1) throw new Error("Someone already joined");
+    const ids = parseItems(mine.itemsJson).map((item) => item.uid);
+    await db.$transaction([
+      db.inventoryItem.updateMany({ where: { id: { in: ids } }, data: { locked: false } }),
+      db.game.delete({ where: { id: gameId } }),
+    ]);
+    return { ok: true, mode: game.mode };
+  }
+
+  if (isCreator) {
+    const ids = game.entries.flatMap((entry) => parseItems(entry.itemsJson).map((item) => item.uid));
+    await db.$transaction([
+      db.inventoryItem.updateMany({ where: { id: { in: ids } }, data: { locked: false } }),
+      db.game.delete({ where: { id: gameId } }),
+    ]);
+    return { ok: true, mode: game.mode };
+  }
+
+  const mineAll = game.entries.filter((entry) => sameSeat(entry.user, user));
+  const ids = mineAll.flatMap((entry) => parseItems(entry.itemsJson).map((item) => item.uid));
+  await db.$transaction([
+    db.inventoryItem.updateMany({ where: { id: { in: ids } }, data: { locked: false } }),
+    db.gameEntry.deleteMany({ where: { id: { in: mineAll.map((entry) => entry.id) } } }),
+  ]);
+  return { ok: true, mode: game.mode };
 }
 
 export async function listHistory(userId: string) {
@@ -484,9 +686,21 @@ export async function sendChat(userId: string, text: string) {
 }
 
 export async function leaderboard() {
-  const users = await db.user.findMany({ orderBy: { profit: "desc" }, take: 30 });
+  const users = await db.user.findMany({ orderBy: { profit: "desc" }, take: 60 });
+  const rows: typeof users = [];
+  for (const user of users) {
+    const existing = rows.find((row) => samePlayer(row, user));
+    if (existing) {
+      existing.wagered += user.wagered;
+      existing.profit += user.profit;
+      existing.wins += user.wins;
+      existing.games += user.games;
+      continue;
+    }
+    rows.push({ ...user });
+  }
   return Object.fromEntries(
-    users.map((user) => [
+    rows.slice(0, 30).map((user) => [
       user.id,
       { player: toPlayer(user), wagered: user.wagered, profit: user.profit, wins: user.wins, games: user.games },
     ]),

@@ -87,6 +87,7 @@ export type RaceGame = {
 export type UpgradeRoll = {
   id: string;
   at: number;
+  player: Player;
   stakeItems: PetInstance[];
   target: PetInstance;
   chance: number;

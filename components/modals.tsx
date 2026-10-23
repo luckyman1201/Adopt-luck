@@ -269,6 +269,7 @@ export function CreateGameModal() {
   const { modal, createMode, closeModal, createCoin, createJackpot, createRace, user, openModal } = useStore();
   const [selected, setSelected] = useState<PetInstance[]>([]);
   const [side, setSide] = useState<CoinSide>("heads");
+  const [busy, setBusy] = useState(false);
 
   if (modal !== "create") return null;
 
@@ -276,16 +277,22 @@ export function CreateGameModal() {
     setSelected((prev) => (prev.some((row) => row.uid === item.uid) ? prev.filter((row) => row.uid !== item.uid) : [...prev, item]));
   }
 
-  function submit() {
+  async function submit() {
+    if (busy) return;
     if (!user) {
       openModal("login");
       return;
     }
     if (!selected.length) return;
-    if (createMode === "coinflip") createCoin(selected, side);
-    else if (createMode === "jackpot") createJackpot(selected);
-    else createRace(selected);
-    setSelected([]);
+    setBusy(true);
+    try {
+      if (createMode === "coinflip") await createCoin(selected, side);
+      else if (createMode === "jackpot") await createJackpot(selected);
+      else await createRace(selected);
+      setSelected([]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   const title =
@@ -301,6 +308,7 @@ export function CreateGameModal() {
       showSide={createMode === "coinflip"}
       onClose={closeModal}
       onSubmit={submit}
+      busy={busy}
     />
   );
 }
@@ -315,6 +323,7 @@ function CreateInner({
   targetValue,
   onClose,
   onSubmit,
+  busy,
 }: {
   title: string;
   selected: PetInstance[];
@@ -325,6 +334,7 @@ function CreateInner({
   targetValue?: number;
   onClose: () => void;
   onSubmit: () => void;
+  busy?: boolean;
 }) {
   return (
     <Overlay onClose={onClose}>
@@ -363,13 +373,20 @@ function CreateInner({
           </div>
         )}
         <InventoryPicker selected={selected} onToggle={onToggle} targetValue={targetValue} />
-        <button
-          onClick={onSubmit}
-          disabled={!selected.length}
-          className="btn btn-primary mt-4 h-11 w-full"
-        >
-          Confirm
-        </button>
+        <div className="mt-4 flex gap-2">
+          {selected.length > 0 && (
+            <button type="button" onClick={onClose} className="btn btn-cancel h-11 flex-1">
+              Cancel
+            </button>
+          )}
+          <button
+            onClick={onSubmit}
+            disabled={!selected.length || busy}
+            className="btn btn-primary h-11 flex-1"
+          >
+            {busy ? "Creating…" : "Confirm"}
+          </button>
+        </div>
       </div>
     </Overlay>
   );
@@ -390,6 +407,10 @@ export function JoinPickerController({
 }) {
   const { user, openModal } = useStore();
   const [selected, setSelected] = useState<PetInstance[]>([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) setBusy(false);
+  }, [open]);
   if (!open) return null;
 
   return (
@@ -410,17 +431,19 @@ export function JoinPickerController({
         />
         <button
           onClick={() => {
+            if (busy || !selected.length) return;
             if (!user) {
               openModal("login");
               return;
             }
+            setBusy(true);
             onConfirm(selected);
             setSelected([]);
           }}
-          disabled={!selected.length}
+          disabled={!selected.length || busy}
           className="btn btn-primary mt-4 h-11 w-full"
         >
-          Join
+          {busy ? "Joining…" : "Join"}
         </button>
       </div>
     </Overlay>

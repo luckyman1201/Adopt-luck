@@ -3,6 +3,7 @@
 import { Brand } from "@/components/brand";
 import { ChatIcon, CoinIcon, CrownIcon, DiscordIcon, JackpotIcon, LoginIcon, RaceIcon, UpgradeIcon } from "@/components/icons";
 import { PlayerChip } from "@/components/pet-tile";
+import { formatValue } from "@/lib/format";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -17,7 +18,7 @@ const LINKS = [
 
 export function Navbar({ onOpenChat, chatCount = 0 }: { onOpenChat?: () => void; chatCount?: number }) {
   const pathname = usePathname();
-  const { user, openModal, logout } = useStore();
+  const { user, openModal, logout, totals } = useStore();
 
   return (
     <nav className="fixed z-40 flex h-[calc(3.5rem+env(safe-area-inset-top))] w-full items-center justify-between border-b border-white/10 bg-nav/90 px-3 pt-[env(safe-area-inset-top)] backdrop-blur md:px-8 lg:h-20 lg:pt-0">
@@ -58,13 +59,24 @@ export function Navbar({ onOpenChat, chatCount = 0 }: { onOpenChat?: () => void;
       <div className="hidden items-center gap-3 lg:flex">
         {user ? (
           <>
+            <div className="flex items-center gap-1.5 text-sm font-semibold">
+              <img src="/gem.svg" alt="" width={16} height={16} className="-mt-px h-4 w-4" />
+              {formatValue(totals.value)}
+            </div>
+            <button
+              type="button"
+              onClick={() => openModal("history")}
+              className="inline-flex h-9 items-center justify-center rounded-md bg-[#FFA834] px-5 text-sm font-semibold text-[#1a1204] hover:bg-[#ffb020]"
+            >
+              Wallet
+            </button>
             <PlayerChip player={user} />
-            <button onClick={logout} className="btn btn-muted px-5">
+            <button onClick={logout} className="text-sm font-semibold text-white/50 hover:text-white">
               Logout
             </button>
           </>
         ) : (
-          <button onClick={() => openModal("login")} className="btn btn-primary px-8">
+          <button onClick={() => openModal("login")} className="inline-flex h-10 items-center justify-center rounded-md bg-[#FFA834] px-8 text-sm font-semibold text-[#1a1204] hover:bg-[#ffb020]">
             <LoginIcon className="mr-2 h-5 w-5" />
             Login
           </button>
@@ -91,13 +103,20 @@ export function Navbar({ onOpenChat, chatCount = 0 }: { onOpenChat?: () => void;
           </button>
           {user ? (
             <>
+              <button
+                type="button"
+                onClick={() => openModal("history")}
+                className="inline-flex h-9 items-center justify-center rounded-md bg-[#FFA834] px-3 text-xs font-semibold text-[#1a1204]"
+              >
+                Wallet
+              </button>
               <PlayerChip player={user} compact />
-              <button onClick={logout} className="btn btn-muted h-9 shrink-0 px-3 text-xs">
+              <button onClick={logout} className="text-xs font-semibold text-white/50">
                 Out
               </button>
             </>
           ) : (
-            <button onClick={() => openModal("login")} className="btn btn-primary h-9 shrink-0 px-3 text-xs">
+            <button onClick={() => openModal("login")} className="inline-flex h-9 shrink-0 items-center rounded-md bg-[#FFA834] px-3 text-xs font-semibold text-[#1a1204]">
               Login
             </button>
           )}

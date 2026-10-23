@@ -4,7 +4,7 @@ import { Wordmark } from "@/components/brand";
 import { ChatSidebar, MobileChatSheet } from "@/components/chat-sidebar";
 import { CreateGameModal, HistoryModal, LoginModal } from "@/components/modals";
 import { MobileNav, Navbar } from "@/components/navbar";
-import { ValueGem } from "@/components/pet-tile";
+import { formatValue } from "@/lib/format";
 import { VALUES_SOURCE, VALUES_UPDATED } from "@/lib/pets";
 import { useStore } from "@/lib/store";
 import { usePathname } from "next/navigation";
@@ -56,18 +56,21 @@ export function SiteShell({ children }: { children: ReactNode }) {
 export function StatsRow() {
   const { totals } = useStore();
   return (
-    <div className="flex flex-wrap items-center gap-x-8 gap-y-2 rounded-xl border border-white/10 bg-card px-4 py-3">
-      <div className="flex items-baseline gap-2">
-        <span className="text-lg font-semibold">{totals.items}</span>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/40">Pets</span>
+    <div className="mb-3 grid gap-2 md:grid-cols-3">
+      <div className="rounded border border-white/10 bg-card px-4 py-2">
+        <div className="text-xl font-semibold">{totals.items}</div>
+        <div className="font-semibold opacity-60">Total Items</div>
       </div>
-      <div className="flex items-baseline gap-2">
-        <ValueGem value={totals.value} className="text-lg" />
-        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/40">Value</span>
+      <div className="rounded border border-white/10 bg-card px-4 py-2">
+        <div className="flex items-center gap-2 text-xl font-semibold">
+          <img alt="value gem" width={20} height={20} className="-mt-[3px] h-5 w-5" src="/gem.svg" />
+          {formatValue(totals.value)}
+        </div>
+        <div className="font-semibold opacity-60">Total Value</div>
       </div>
-      <div className="flex items-baseline gap-2">
-        <span className="text-lg font-semibold">{totals.active}</span>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/40">Games</span>
+      <div className="rounded border border-white/10 bg-card px-4 py-2">
+        <div className="text-xl font-semibold">{totals.active}</div>
+        <div className="font-semibold opacity-60">Active Games</div>
       </div>
     </div>
   );

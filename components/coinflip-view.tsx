@@ -6,6 +6,7 @@ import { StatsRow } from "@/components/site-shell";
 import { formatValue } from "@/lib/format";
 import { canJoinValue, joinRange } from "@/lib/game-engine";
 import { getPet, itemValue, itemsValue, VALUES_SOURCE, VALUES_UPDATED } from "@/lib/pets";
+import { samePlayer } from "@/lib/player";
 import { useStore } from "@/lib/store";
 import type { CoinFlipGame, CoinSide, PetInstance, Player } from "@/lib/types";
 import { useMemo, useRef, useState, type ReactNode } from "react";
@@ -215,11 +216,13 @@ function CoinRow({
   own,
   highlight,
   onOpen,
+  onCancel,
 }: {
   game: CoinFlipGame;
   own?: boolean;
   highlight?: boolean;
   onOpen: () => void;
+  onCancel?: () => void;
 }) {
   const hostValue = itemsValue(game.creatorItems);
   const joinValue = game.joinerItems ? itemsValue(game.joinerItems) : 0;
@@ -283,9 +286,16 @@ function CoinRow({
         won={oppWon}
         mirror
         action={
-          <span className="btn btn-primary h-9 px-4 text-xs sm:h-10 sm:px-5 sm:text-sm">
-            {game.status === "open" ? (own ? "View" : "Join") : "View"}
-          </span>
+          <div className="flex items-center justify-end gap-2" onClick={(event) => event.stopPropagation()}>
+            {game.status === "open" && own && !game.joiner && onCancel && (
+              <button type="button" onClick={onCancel} className="btn btn-cancel h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm">
+                Cancel
+              </button>
+            )}
+            <button type="button" onClick={onOpen} className="btn btn-primary h-9 px-4 text-xs sm:h-10 sm:px-5 sm:text-sm">
+              {game.status === "open" ? (own ? "View" : "Join") : "View"}
+            </button>
+          </div>
         }
       />
     </div>
@@ -335,7 +345,7 @@ function CoinMatchModal({
   game: CoinFlipGame;
   onClose: () => void;
 }) {
-  const { user, inventory, joinCoin, callOpponent, requireUser } = useStore();
+  const { user, inventory, joinCoin, callOpponent, cancelGame, requireUser } = useStore();
   const [stake, setStake] = useState<PetInstance[]>([]);
   const [busy, setBusy] = useState(false);
   const hostValue = itemsValue(game.creatorItems);
@@ -345,7 +355,7 @@ function CoinMatchModal({
   const settled = game.status === "done";
   const shown = (settled && game.result) || game.creatorSide;
   const winner = winnerOf(game);
-  const own = game.creator.id === user?.id;
+  const own = samePlayer(game.creator, user);
   const canJoin = game.status === "open" && !own && !game.joiner;
   const canCallBot = game.status === "open" && own && !game.joiner;
   const stakeValue = itemsValue(stake);
@@ -365,6 +375,14 @@ function CoinMatchModal({
     setBusy(true);
     await callOpponent(game.id);
     setBusy(false);
+  }
+
+  async function cancelTable() {
+    if (!requireUser() || busy) return;
+    setBusy(true);
+    await cancelGame(game.id);
+    setBusy(false);
+    onClose();
   }
 
   return (
@@ -460,9 +478,14 @@ function CoinMatchModal({
             <p className="text-center text-sm text-white/55">
               Wait for a player, or play solo against a bot. The flip starts only after you confirm.
             </p>
-            <button onClick={startBot} disabled={busy} className="btn btn-primary h-11 min-w-48 px-8">
-              {busy ? "Starting…" : "Play vs bot"}
-            </button>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+              <button onClick={cancelTable} disabled={busy} className="btn btn-cancel h-11 min-w-36 px-6">
+                {busy ? "Cancelling…" : "Cancel table"}
+              </button>
+              <button onClick={startBot} disabled={busy} className="btn btn-primary h-11 min-w-48 px-8">
+                {busy ? "Starting…" : "Play vs bot"}
+              </button>
+            </div>
           </div>
         )}
 
@@ -476,7 +499,7 @@ function CoinMatchModal({
 }
 
 export function CoinFlipView() {
-  const { coins, inventory, user, createCoin, requireUser, openModal } = useStore();
+  const { coins, inventory, user, createCoin, cancelGame, requireUser, openModal } = useStore();
   const [selected, setSelected] = useState<PetInstance[]>([]);
   const [side, setSide] = useState<CoinSide>("heads");
   const [viewId, setViewId] = useState<string | null>(null);
@@ -485,7 +508,7 @@ export function CoinFlipView() {
   const listRef = useRef<HTMLDivElement>(null);
   const selectedValue = itemsValue(selected);
   const viewing = coins.find((item) => item.id === viewId);
-  const mine = coins.find((item) => item.creator.id === user?.id && item.status === "open");
+  const mine = coins.find((item) => samePlayer(item.creator, user) && item.status === "open");
   const preview = coins.find((item) => item.id === highlightId) || mine || coins.find((item) => item.status === "open");
   const opponentItems = preview?.creatorItems ?? [];
   const opponentValue = itemsValue(opponentItems);
@@ -577,9 +600,13 @@ export function CoinFlipView() {
           <CoinRow
             key={item.id}
             game={item}
-            own={item.creator.id === user?.id}
+            own={samePlayer(item.creator, user)}
             highlight={item.id === highlightId}
             onOpen={() => openTable(item)}
+            onCancel={async () => {
+              await cancelGame(item.id);
+              if (viewId === item.id) setViewId(null);
+            }}
           />
         ))}
         {!coins.length && (

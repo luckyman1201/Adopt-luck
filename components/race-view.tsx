@@ -2,19 +2,21 @@
 
 import { JoinPickerController } from "@/components/modals";
 import { PetAvatar, PlayerChip, ValueGem } from "@/components/pet-tile";
-import { StatsRow, Toolbar } from "@/components/site-shell";
+import { Toolbar } from "@/components/site-shell";
 import { getPet, itemsValue } from "@/lib/pets";
+import { samePlayer, seatedIn } from "@/lib/player";
 import { useStore } from "@/lib/store";
 import { useState } from "react";
 
 export function RaceView() {
-  const { races, joinRace, startRace, user, requireUser } = useStore();
+  const { races, joinRace, startRace, cancelGame, user, requireUser } = useStore();
   const [joinId, setJoinId] = useState<string | null>(null);
   const live = races[0];
+  const inLive = seatedIn(live?.entries ?? [], user);
+  const isCreator = Boolean(live && samePlayer(live.entries[0]?.player, user));
 
   return (
     <div>
-      <StatsRow />
       <Toolbar createMode="race" />
       <div className="fade-up rounded-xl border border-white/10 bg-card/80 p-4">
         {!live && <div className="py-16 text-center text-white/40">Create a race to open the track.</div>}
@@ -45,7 +47,17 @@ export function RaceView() {
               })}
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              {live.status === "open" && !live.entries.some((entry) => entry.player.id === user?.id) && (
+              {live.status === "open" && isCreator && (
+                <button onClick={() => cancelGame(live.id)} className="btn btn-cancel">
+                  Cancel race
+                </button>
+              )}
+              {live.status === "open" && inLive && !isCreator && (
+                <button onClick={() => cancelGame(live.id)} className="btn btn-cancel">
+                  Leave
+                </button>
+              )}
+              {live.status === "open" && !inLive && (
                 <button
                   onClick={() => {
                     if (!requireUser()) return;
@@ -73,7 +85,12 @@ export function RaceView() {
                 <PlayerChip key={entry.player.id} player={entry.player} compact />
               ))}
             </div>
-            {game.status === "open" && (
+            {game.status === "open" && samePlayer(game.entries[0]?.player, user) && (
+              <button onClick={() => cancelGame(game.id)} className="btn btn-cancel h-9">
+                Cancel
+              </button>
+            )}
+            {game.status === "open" && !samePlayer(game.entries[0]?.player, user) && !seatedIn(game.entries, user) && (
               <button
                 onClick={() => {
                   if (!requireUser()) return;

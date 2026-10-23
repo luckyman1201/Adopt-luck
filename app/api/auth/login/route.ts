@@ -1,47 +1,17 @@
 import { setSessionCookie } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { makeItem } from "@/lib/pets";
 import {
   clearChallenge,
   getChallenge,
-  hueFromRobloxId,
   accountHasLoginCode,
   lookupRobloxUser,
   makeLoginCode,
   saveChallenge,
 } from "@/lib/roblox.server";
-import { newId, toPlayer } from "@/lib/server/helpers";
+import { withDbRetry } from "@/lib/db";
+import { toPlayer } from "@/lib/server/helpers";
 import { fail, ok, readJson } from "@/lib/server/http";
-import { apiError, apiLog, dbEnvInfo } from "@/lib/server/log";
-
-const STARTER = [
-  ["turtle", { fly: true, ride: true }],
-  ["flamingo", { ride: true }],
-  ["kangaroo", { fly: true }],
-  ["unicorn", {}],
-  ["dragon", {}],
-  ["bee", {}],
-] as const;
-
-async function grantStarter(userId: string) {
-  if (process.env.GRANT_STARTER_PETS !== "true") return;
-  const owned = await db.inventoryItem.count({ where: { userId } });
-  if (owned > 0) return;
-  await db.inventoryItem.createMany({
-    data: STARTER.map(([petId, flags]) => {
-      const item = makeItem(petId, flags);
-      return {
-        id: item.uid,
-        userId,
-        petId: item.petId,
-        fly: item.fly,
-        ride: item.ride,
-        neon: item.neon,
-        mega: item.mega,
-      };
-    }),
-  });
-}
+import { apiError, apiLog, dbEnvInfo, errorInfo } from "@/lib/server/log";
+import { ensureRobloxUser } from "@/lib/server/users";
 
 async function issueCode(account: { id: string; username: string; displayName: string; profileUrl: string }, reuse?: string) {
   const code = reuse || makeLoginCode();
@@ -102,42 +72,25 @@ export async function POST(request: Request) {
     return fail("The login code was not found in your Roblox About / Bio. Paste it there, save, then click Login again.");
   }
 
-  const staff = (process.env.ROBLOX_STAFF_IDS || "").split(",").map((item) => item.trim()).filter(Boolean);
-  const hue = hueFromRobloxId(live.id);
   try {
-    apiLog("login", "db-user-lookup", { robloxId: live.id });
-    let user = await db.user.findUnique({ where: { robloxId: live.id } });
-    if (!user) {
-      apiLog("login", "db-user-create", { robloxId: live.id, name: live.username });
-      user = await db.user.create({
-        data: {
-          id: newId("user"),
-          robloxId: live.id,
-          name: live.username,
-          avatarUrl: live.avatar || null,
-          hue,
-          isStaff: staff.includes(live.id),
-        },
-      });
-    } else {
-      apiLog("login", "db-user-update", { userId: user.id, robloxId: live.id });
-      user = await db.user.update({
-        where: { id: user.id },
-        data: {
-          name: live.username,
-          avatarUrl: live.avatar || user.avatarUrl,
-          isStaff: staff.includes(live.id),
-        },
-      });
-    }
-
+    apiLog("login", "db-user-upsert", { robloxId: live.id, name: live.username });
+    const user = await withDbRetry(() =>
+      ensureRobloxUser({
+        id: live.id,
+        username: live.username,
+        avatar: live.avatar,
+      }),
+    );
     await clearChallenge(live.id);
-    await grantStarter(user.id);
     await setSessionCookie(user.id);
     apiLog("login", "done", { userId: user.id, robloxId: live.id });
     return ok({ step: "done", user: toPlayer(user) });
   } catch (error) {
     apiError("login", "db-persist", error, { robloxId: live.id });
-    return fail("Could not save your login. Check the production database connection.");
+    const info = errorInfo(error);
+    if (info.code === "P1001" || /can't reach database/i.test(info.message)) {
+      return fail("The database is waking up. Wait a few seconds and click Login again.");
+    }
+    return fail("Could not save your login. Try again.");
   }
 }

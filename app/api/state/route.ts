@@ -1,14 +1,16 @@
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { leaderboard, listChat, listGames, listHistory } from "@/lib/server/games";
+import { leaderboard, listChat, listGames, listHistory, listLiveUpgrades } from "@/lib/server/games";
 import { toItem, toPlayer } from "@/lib/server/helpers";
 import { fail, ok } from "@/lib/server/http";
 import { apiError, apiLog } from "@/lib/server/log";
+import { mergeNameTwins } from "@/lib/server/users";
 
 export async function GET() {
   try {
-    const user = await getSessionUser();
-    const [games, chat, stats] = await Promise.all([listGames(), listChat(), leaderboard()]);
+    const session = await getSessionUser();
+    const user = session ? await mergeNameTwins(session) : null;
+    const [games, chat, stats, upgrades] = await Promise.all([listGames(), listChat(), leaderboard(), listLiveUpgrades()]);
     const inventory = user
       ? await db.inventoryItem.findMany({ where: { userId: user.id, locked: false }, orderBy: { createdAt: "desc" } })
       : [];
@@ -21,6 +23,7 @@ export async function GET() {
       chat,
       stats,
       robloxEnabled: true,
+      upgrades,
       ...games,
     });
   } catch (error) {

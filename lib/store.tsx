@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { itemsValue, PETS, setCatalog, VALUES_UPDATED } from "@/lib/pets";
+import { samePlayer, seatedIn } from "@/lib/player";
 import type {
   ChatMessage,
   CoinFlipGame,
@@ -83,6 +84,7 @@ type Store = {
   createRace: (items: PetInstance[]) => Promise<void>;
   joinRace: (gameId: string, items: PetInstance[]) => Promise<void>;
   startRace: (gameId: string) => Promise<void>;
+  cancelGame: (gameId: string) => Promise<void>;
   rollUpgrade: (stake: PetInstance[], target: PetInstance) => Promise<{ chance: number; roll: number; won: boolean }>;
   requireUser: () => boolean;
   totals: { items: number; value: number; active: number };
@@ -117,6 +119,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       coins: CoinFlipGame[];
       jackpots: JackpotGame[];
       races: RaceGame[];
+      upgrades?: UpgradeRoll[];
       robloxEnabled?: boolean;
     }>("/api/state");
     setRobloxEnabled(Boolean(data.robloxEnabled));
@@ -128,6 +131,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setCoins(data.coins);
     setJackpots(data.jackpots);
     setRaces(data.races);
+    if (data.upgrades) setUpgrades(data.upgrades);
   }, []);
 
   useEffect(() => {
@@ -245,6 +249,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const joinCoin = useCallback(
     async (gameId: string, items: PetInstance[]) => {
+      const table = coins.find((game) => game.id === gameId);
+      if (table && user && (samePlayer(table.creator, user) || samePlayer(table.joiner, user))) {
+        setToast("You are already in this game");
+        return;
+      }
       try {
         await api(`/api/games/coinflip/${gameId}/join`, {
           method: "POST",
@@ -260,7 +269,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setToast(error instanceof Error ? error.message : "Could not join");
       }
     },
-    [refresh],
+    [coins, refresh, user],
   );
 
   const callOpponent = useCallback(
@@ -281,6 +290,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const createJackpot = useCallback(
     async (items: PetInstance[]) => {
+      if (user && jackpots.some((game) => game.status === "open" && seatedIn(game.entries, user))) {
+        setToast("You are already in this jackpot");
+        return;
+      }
       await run(async () => {
         await api("/api/games/jackpot", {
           method: "POST",
@@ -289,11 +302,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setModal(null);
       }, "Jackpot opened");
     },
-    [run],
+    [jackpots, run, user],
   );
 
   const joinJackpot = useCallback(
     async (gameId: string, items: PetInstance[]) => {
+      const pot = jackpots.find((game) => game.id === gameId);
+      if (pot && seatedIn(pot.entries, user)) {
+        setToast("You are already in this lobby");
+        return;
+      }
       await run(async () => {
         await api(`/api/games/jackpot/${gameId}/join`, {
           method: "POST",
@@ -302,7 +320,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setModal(null);
       }, "Joined jackpot");
     },
-    [run],
+    [jackpots, run, user],
   );
 
   const spinJackpot = useCallback(
@@ -323,6 +341,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const createRace = useCallback(
     async (items: PetInstance[]) => {
+      if (user && races.some((game) => game.status === "open" && seatedIn(game.entries, user))) {
+        setToast("You are already in this race");
+        return;
+      }
       await run(async () => {
         await api("/api/games/race", {
           method: "POST",
@@ -331,11 +353,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setModal(null);
       }, "Race opened");
     },
-    [run],
+    [races, run, user],
   );
 
   const joinRace = useCallback(
     async (gameId: string, items: PetInstance[]) => {
+      const race = races.find((game) => game.id === gameId);
+      if (race && seatedIn(race.entries, user)) {
+        setToast("You are already in this lobby");
+        return;
+      }
       await run(async () => {
         await api(`/api/games/race/${gameId}/join`, {
           method: "POST",
@@ -344,7 +371,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setModal(null);
       }, "Joined race");
     },
-    [run],
+    [races, run, user],
   );
 
   const startRace = useCallback(
@@ -359,13 +386,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [refresh, run],
   );
 
+  const cancelGame = useCallback(
+    async (gameId: string) => {
+      await run(async () => {
+        await api(`/api/games/${gameId}/cancel`, { method: "POST" });
+      }, "Game cancelled — pets returned");
+    },
+    [run],
+  );
+
   const rollUpgrade = useCallback(
     async (stake: PetInstance[], target: PetInstance) => {
-      const result = await api<{ chance: number; roll: number; won: boolean }>("/api/games/upgrade", {
-        method: "POST",
-        body: JSON.stringify({ itemIds: stake.map((item) => item.uid), target }),
-      });
-      setUpgrades((prev) => [{ id: `${Date.now()}`, at: Date.now(), stakeItems: stake, target, ...result }, ...prev].slice(0, 20));
+      const result = await api<{ chance: number; roll: number; won: boolean; upgrade?: UpgradeRoll | null }>(
+        "/api/games/upgrade",
+        {
+          method: "POST",
+          body: JSON.stringify({ itemIds: stake.map((item) => item.uid), target }),
+        },
+      );
+      if (result.won && result.upgrade) {
+        setUpgrades((prev) => [result.upgrade!, ...prev.filter((row) => row.id !== result.upgrade!.id)].slice(0, 16));
+      }
       await refresh();
       setToast(result.won ? "Upgrade won" : "Upgrade missed");
       return result;
@@ -422,6 +463,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       createRace,
       joinRace,
       startRace,
+      cancelGame,
       rollUpgrade,
       requireUser,
       totals,
@@ -456,6 +498,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       createRace,
       joinRace,
       startRace,
+      cancelGame,
       rollUpgrade,
       requireUser,
       totals,
